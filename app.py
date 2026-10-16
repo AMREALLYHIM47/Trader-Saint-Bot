@@ -1,5 +1,7 @@
 
 import streamlit as st
+import requests
+import pandas as pd
 
 st.set_page_config(
     page_title="SAINT TRADER AI",
@@ -10,10 +12,8 @@ st.set_page_config(
 st.title("👑 SAINT TRADER AI")
 st.caption("Multi-pair Forex Signal Scanner")
 
-st.info(
-    "Prototype mode: signals are examples only. "
-    "Connect verified market data and test the strategy "
-    "before using signals for trading."
+st.warning(
+    "Data connection test. No trading signals are generated yet."
 )
 
 pairs = [
@@ -24,44 +24,89 @@ pairs = [
     "CHF/JPY", "NZD/JPY", "AUD/NZD"
 ]
 
-st.subheader("Forex Scanner")
+pair = st.selectbox("Currency pair", pairs)
 
-selected_pairs = st.multiselect(
-    "Choose currency pairs",
-    pairs,
-    default=["EUR/USD", "GBP/USD", "USD/JPY"]
-)
+intervals = {
+    "M5": "5min",
+    "M15": "15min",
+    "H1": "1h"
+}
 
 timeframe = st.selectbox(
-    "Entry timeframe",
-    ["M5"],
-    index=0
+    "Candle timeframe",
+    list(intervals.keys())
 )
 
-st.write("Confirmation timeframes: M15 + H1")
+if st.button("Fetch latest candles"):
+    try:
+        api_key = st.secrets["TWELVE_DATA_API_KEY"]
 
-if st.button("Scan selected pairs"):
-    st.warning(
-        "Market data is not connected yet. "
-        "No live trading signals are being generated."
-    )
+        response = requests.get(
+            "https://api.twelvedata.com/time_series",
+            params={
+                "symbol": pair,
+                "interval": intervals[timeframe],
+                "outputsize": 5,
+                "apikey": api_key
+            },
+            timeout=20
+        )
 
-st.subheader("Signal Dashboard")
+        if response.status_code != 200:
+            st.error(
+                f"Data provider returned HTTP "
+                f"{response.status_code}."
+            )
+        else:
+            data = response.json()
 
-st.dataframe(
-    {
-        "Pair": selected_pairs,
-        "H1 Trend": ["Awaiting data"] * len(selected_pairs),
-        "M15 Confirmation": ["Awaiting data"] * len(selected_pairs),
-        "M5 Signal": ["NO SIGNAL"] * len(selected_pairs),
-    },
-    use_container_width=True,
-    hide_index=True
-)
+            if data.get("status") == "error":
+                st.error(
+                    "Data request failed: "
+                    + str(data.get("message", "Unknown error"))
+                )
+            elif data.get("values"):
+                candles = pd.DataFrame(data["values"])
+                candles["datetime"] = pd.to_datetime(
+                    candles["datetime"], errors="coerce"
+                )
+                for column in ["open", "high", "low", "close"]:
+                    candles[column] = pd.to_numeric(
+                        candles[column], errors="coerce"
+                    )
+
+                st.success(
+                    f"Received {len(candles)} candles for "
+                    f"{pair} on {timeframe}."
+                )
+                st.dataframe(
+                    candles,
+                    use_container_width=True,
+                    hide_index=True
+                )
+                st.caption(
+                    "Confirm the provider's timestamp and "
+                    "data-delay details before using these prices."
+                )
+            else:
+                st.error(
+                    "No candle data was returned. "
+                    "Check pair availability and API limits."
+                )
+
+    except KeyError:
+        st.error(
+            "API key not found. Check Streamlit Settings > Secrets."
+        )
+    except requests.exceptions.RequestException as error:
+        st.error(
+            f"Could not reach the data provider: {error}"
+        )
+    except Exception as error:
+        st.error(f"Unexpected error: {error}")
 
 st.divider()
 st.caption(
-    "SAINT TRADER AI • Educational prototype • "
+    "SAINT TRADER AI | Educational prototype | "
     "Paper trading only"
 )
-
