@@ -53,7 +53,13 @@ def fetch_candles(pair, interval, api_key):
     df = df.dropna(
         subset=["datetime", "open", "high", "low", "close"]
     )
-    return df.sort_values("datetime").reset_index(drop=True)
+    df = df.sort_values("datetime").reset_index(drop=True)
+
+# Exclude the newest candle because it may still be forming.
+if len(df) > 1:
+    df = df.iloc[:-1].reset_index(drop=True)
+
+return df
 
 
 def add_indicators(df):
