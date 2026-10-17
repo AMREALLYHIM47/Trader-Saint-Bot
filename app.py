@@ -20,7 +20,11 @@ PAIRS = [
     "CHF/JPY", "NZD/JPY", "AUD/NZD"
 ]
 
-TIMEFRAMES = {"M5": "5min", "M15": "15min", "H1": "1h"}
+TIMEFRAMES = {
+    "M5": "5min",
+    "M15": "15min",
+    "H1": "1h"
+}
 
 
 @st.cache_data(ttl=60)
@@ -35,31 +39,41 @@ def fetch_candles(pair, interval, api_key):
         },
         timeout=20
     )
+
     response.raise_for_status()
     data = response.json()
 
     if data.get("status") == "error":
-        raise ValueError(data.get("message", "Data provider error"))
+        raise ValueError(
+            data.get("message", "Data provider error")
+        )
 
     if not data.get("values"):
         raise ValueError("No candles returned")
 
     df = pd.DataFrame(data["values"])
-    df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
+
+    df["datetime"] = pd.to_datetime(
+        df["datetime"], errors="coerce"
+    )
 
     for col in ["open", "high", "low", "close"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+        df[col] = pd.to_numeric(
+            df[col], errors="coerce"
+        )
 
     df = df.dropna(
         subset=["datetime", "open", "high", "low", "close"]
     )
+
     df = df.sort_values("datetime").reset_index(drop=True)
 
-# Exclude the newest candle because it may still be forming.
-if len(df) > 1:
-    df = df.iloc[:-1].reset_index(drop=True)
+    # Conservatively exclude the newest candle.
+    # Provider timestamps should be checked before relying on signals.
+    if len(df) > 1:
+        df = df.iloc[:-1].reset_index(drop=True)
 
-return df
+    return df
 
 
 def add_indicators(df):
@@ -68,6 +82,7 @@ def add_indicators(df):
     df["ema20"] = df["close"].ewm(
         span=20, adjust=False
     ).mean()
+
     df["ema50"] = df["close"].ewm(
         span=50, adjust=False
     ).mean()
@@ -77,14 +92,19 @@ def add_indicators(df):
     loss = -delta.clip(upper=0)
 
     avg_gain = gain.ewm(
-        alpha=1/14, min_periods=14, adjust=False
+        alpha=1 / 14,
+        min_periods=14,
+        adjust=False
     ).mean()
+
     avg_loss = loss.ewm(
-        alpha=1/14, min_periods=14, adjust=False
+        alpha=1 / 14,
+        min_periods=14,
+        adjust=False
     ).mean()
 
     rs = avg_gain / avg_loss.replace(0, float("nan"))
-    df["rsi"] = 100 - 100 / (1 + rs)
+    df["rsi"] = 100 - (100 / (1 + rs))
 
     high_low = df["high"] - df["low"]
     high_close = (
@@ -95,37 +115,56 @@ def add_indicators(df):
     ).abs()
 
     tr = pd.concat(
-        [high_low, high_close, low_close], axis=1
+        [high_low, high_close, low_close],
+        axis=1
     ).max(axis=1)
 
     up_move = df["high"].diff()
     down_move = -df["low"].diff()
 
     plus_dm = up_move.where(
-        (up_move > down_move) & (up_move > 0), 0.0
+        (up_move > down_move) & (up_move > 0),
+        0.0
     )
+
     minus_dm = down_move.where(
-        (down_move > up_move) & (down_move > 0), 0.0
+        (down_move > up_move) & (down_move > 0),
+        0.0
     )
 
     df["atr"] = tr.ewm(
-        alpha=1/14, min_periods=14, adjust=False
+        alpha=1 / 14,
+        min_periods=14,
+        adjust=False
     ).mean()
 
-    plus_di = 100 * plus_dm.ewm(
-        alpha=1/14, min_periods=14, adjust=False
-    ).mean() / df["atr"].replace(0, float("nan"))
+    plus_di = (
+        100 * plus_dm.ewm(
+            alpha=1 / 14,
+            min_periods=14,
+            adjust=False
+        ).mean()
+        / df["atr"].replace(0, float("nan"))
+    )
 
-    minus_di = 100 * minus_dm.ewm(
-        alpha=1/14, min_periods=14, adjust=False
-    ).mean() / df["atr"].replace(0, float("nan"))
+    minus_di = (
+        100 * minus_dm.ewm(
+            alpha=1 / 14,
+            min_periods=14,
+            adjust=False
+        ).mean()
+        / df["atr"].replace(0, float("nan"))
+    )
 
-    dx = 100 * (plus_di - minus_di).abs() / (
-        plus_di + minus_di
-    ).replace(0, float("nan"))
+    dx = (
+        100 * (plus_di - minus_di).abs()
+        / (plus_di + minus_di).replace(0, float("nan"))
+    )
 
     df["adx"] = dx.ewm(
-        alpha=1/14, min_periods=14, adjust=False
+        alpha=1 / 14,
+        min_periods=14,
+        adjust=False
     ).mean()
 
     return df
@@ -142,8 +181,10 @@ def trend_direction(df):
 
     if last["ema20"] > last["ema50"]:
         return "BULLISH"
+
     if last["ema20"] < last["ema50"]:
         return "BEARISH"
+
     return "NEUTRAL"
 
 
@@ -153,8 +194,9 @@ def entry_signal(df):
 
     last = df.iloc[-1]
 
-    needed = ["ema20", "ema50", "rsi", "adx", "atr"]
-    if last[needed].isna().any():
+    required = ["ema20", "ema50", "rsi", "adx", "atr"]
+
+    if last[required].isna().any():
         return "NO SIGNAL", "Indicators not ready"
 
     if (
@@ -180,9 +222,13 @@ selected_pairs = st.multiselect(
     default=["EUR/USD"]
 )
 
-if st.button("Scan with M5 + M15 + H1 confirmation", type="primary"):
+if st.button(
+    "Scan with M5 + M15 + H1 confirmation",
+    type="primary"
+):
     if not selected_pairs:
         st.warning("Select at least one pair.")
+
     else:
         try:
             api_key = st.secrets["TWELVE_DATA_API_KEY"]
@@ -190,21 +236,29 @@ if st.button("Scan with M5 + M15 + H1 confirmation", type="primary"):
             for pair in selected_pairs:
                 st.subheader(pair)
 
-                # Three API requests per pair; select pairs carefully.
                 results = {}
                 errors = {}
 
+                # Fetch each timeframe once per pair.
                 for tf, interval in TIMEFRAMES.items():
                     try:
-                        raw = fetch_candles(pair, interval, api_key)
+                        raw = fetch_candles(
+                            pair, interval, api_key
+                        )
                         results[tf] = add_indicators(raw)
+
                     except Exception as error:
                         errors[tf] = str(error)
 
                 if errors:
                     for tf, message in errors.items():
-                        st.warning(f"{tf} data unavailable: {message}")
-                    st.info("NO SIGNAL — confirmation data is incomplete.")
+                        st.warning(
+                            f"{tf} data unavailable: {message}"
+                        )
+
+                    st.info(
+                        "NO SIGNAL — confirmation data is incomplete."
+                    )
                     continue
 
                 m5 = results["M5"]
@@ -212,32 +266,52 @@ if st.button("Scan with M5 + M15 + H1 confirmation", type="primary"):
                 h1 = results["H1"]
 
                 signal, reason = entry_signal(m5)
+
                 trend15 = trend_direction(m15)
                 trend1h = trend_direction(h1)
 
-                if signal == "BUY" and not (
-                    trend15 == "BULLISH" and trend1h == "BULLISH"
-                ):
-                    signal = "NO SIGNAL"
-                    reason = "M15 and H1 must both be bullish"
+                if signal == "BUY":
+                    if not (
+                        trend15 == "BULLISH"
+                        and trend1h == "BULLISH"
+                    ):
+                        signal = "NO SIGNAL"
+                        reason = (
+                            "M15 and H1 must both be bullish"
+                        )
 
-                elif signal == "SELL" and not (
-                    trend15 == "BEARISH" and trend1h == "BEARISH"
-                ):
-                    signal = "NO SIGNAL"
-                    reason = "M15 and H1 must both be bearish"
+                elif signal == "SELL":
+                    if not (
+                        trend15 == "BEARISH"
+                        and trend1h == "BEARISH"
+                    ):
+                        signal = "NO SIGNAL"
+                        reason = (
+                            "M15 and H1 must both be bearish"
+                        )
 
                 last = m5.iloc[-1]
 
                 c1, c2, c3, c4 = st.columns(4)
+
                 c1.metric("Final signal", signal)
-                c2.metric("M5 close", f"{last['close']:.5f}")
-                c3.metric("RSI 14", f"{last['rsi']:.1f}")
-                c4.metric("ADX 14", f"{last['adx']:.1f}")
+                c2.metric(
+                    "M5 close",
+                    f"{last['close']:.5f}"
+                )
+                c3.metric(
+                    "RSI 14",
+                    f"{last['rsi']:.1f}"
+                )
+                c4.metric(
+                    "ADX 14",
+                    f"{last['adx']:.1f}"
+                )
 
                 st.write(f"**M5 setup:** {reason}")
                 st.write(f"**M15 trend:** {trend15}")
                 st.write(f"**H1 trend:** {trend1h}")
+
                 st.write(
                     f"**EMA20:** {last['ema20']:.5f} | "
                     f"**EMA50:** {last['ema50']:.5f} | "
@@ -251,9 +325,15 @@ if st.button("Scan with M5 + M15 + H1 confirmation", type="primary"):
                     )
 
         except KeyError:
-            st.error("Missing TWELVE_DATA_API_KEY in Streamlit Secrets.")
+            st.error(
+                "Missing TWELVE_DATA_API_KEY in Streamlit Secrets."
+            )
+
+        except Exception as error:
+            st.error(f"Unexpected error: {error}")
 
 st.divider()
+
 st.caption(
     "Educational prototype | No live orders | "
     "Signals are experimental and not guaranteed profitable."
